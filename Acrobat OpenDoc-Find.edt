@@ -1,0 +1,143 @@
+// -*- ASCII:EDT -*-
+// %b\Exec\Acrobat OpenDoc-Find.edt
+// (schlicht 20070213)
+/////////////////////////
+
+// -------------------------------------------------------------------
+//       ***   Forward search for PDF documents   ***
+//    (Adobe Reader, Acrobat Professional, Foxit Reader)
+//
+//   If the document is compiled with the `pdfsync' package,
+//   the PDF file will be opened on the page corresponding to
+//   the current location of the caret.
+//   Otherwise, or in case the page couldn't be figured out,
+//   the default macro "Acrobat OpenDoc.edt" will be executed,
+//   jumping back to the last viewed page.
+// -------------------------------------------------------------------
+
+Requires(20061121); // 5.5 beta 3, because of %#?
+
+PushTagsandRegisters;
+Assign("PDF_page");
+
+// anything to be done for us?
+GetPreamble("\begin{document}",5);
+// FIXME: \usepackage{whatever,%%>  pdfsync}
+FindInString("%!5","<@{^{\\|%%}}\\usepackage@{ |>}@{\[\(@{>|^{\]}}\)\]}@{ |>}\{@{>| |^{pdfsync|%%|\}}}pdfsync",8,9,11);
+IfOK("","JMP('open_PDF');");
+FindInString(",%#0,",",off,",8,9);
+IfOK("JMP('open_PDF');");
+IfFileExists("%O\%N.pdfsync","","JMP('open_PDF');");
+
+IfFileOlder("%O\%N.pdfsync","%f",>
+   "StartWorking('pdfsync file is not up to date!');",>
+   "StartWorking('pdfsync: getting current page...');");
+
+GetDocAsASCII(0,"%O\%N.pdfsync",0,0);
+
+IfStr("%F","%f","=",>
+ !`// inside the preamble? <>
+   GetLength(5,"%!5");>
+   SetCLStart(0);>
+   CLToIndex(1,%l,6);>
+   IfNum(%!5,%!6,">","Assign('PDF_page','1');JMP('open_PDF');");>
+   IfisMode("DTX","%!M",>
+    !"// DTX files include themselves <>
+      FindInString('%!0','%\(%N%T%\',8,9,10);>
+      IfOK(!'ReplaceInString(''%!0'','''',0,%!9,0,0);');",>
+    !"// after \end{document}? <>
+      GetPreamble('\end{document}',5);>
+      GetLength(5,'%!5');>
+      SetCLStart(0);>
+      CLToIndex(1,%l,6);>
+      IfNum(%!5,%!6,'<','Assign(''PDF_page'',''99999'');JMP(''open_PDF'');');>
+   ");`,>
+ !`FindInString("%!0",'<(\"?%n?@{\"?%t?}>',8,9,11);>
+   IfOK(>
+     !"ReplaceInString('%!0','',0,%!9,0,0);",// included file <>
+     !"JMP('open_PDF');");// not related to main file <>
+`);
+
+// remove included files
+LetRegNum(5,0); // stack count
+LetRegNum(6,0); // begin index
+LetRegNum(9,-1);
+Loop(!`>
+   SetOK(1);>
+   FindInString("%!0","<\((|)\)",8,9,1011,%!9+1);>
+   IfOK(!">
+      IfStr('%#0','(','=',>
+       !'IfNum(%!5,0,''='',''LetRegNum(6,%!8);'');>
+         LetRegNum(5,%!5+1);',>
+       !'LetRegNum(5,%!5-1);');",>
+    !"Break;");>
+   // end of included file:
+   IfNum(%!5,0,"=",!">
+      ReplaceInString('%!0','',%!6,%!9+2,0,0);>
+      LetRegNum(9,'%!6-1');>
+   ");>
+   // end of %f, remove rest:
+   IfNum(%!5,-1,"=",!"ExtractByIndex(0,'%!0',0,%!8-2);");>
+`);
+
+// get record for current line
+LetRegNum(5,%l);
+Loop(!`>
+   StartWorking("%!5");>
+   // instead of the straight-forward:
+   //FindInString("%!0","<l \(+[0-9]\) %!5>",8,9,11);>
+   //IfOK(!"LetRegNum(6,'%#0');Stop;",>
+   // we do a non-regex search, which is much faster:
+   FindInString("%!0"," %!5%\",8,9,10);>
+   IfOK(!"// is it really an "l" record? <>
+      FindInString('%!0','%\',6,7,1110,%!8);>
+      ExtractByIndex(7,'%!0',%!7+1,%!8);>
+      FindInString('%!7','l \(+[0-9]\) ',7,8,11);>
+      IfOK(!'LetRegNum(6,''%#0'');Stop;',>
+           !'ReplaceInString(|%!0|,||,%!6,%!9,0,0);');",>
+    !"IfNum(%!5,%l+100,'=','JMP(''open_PDF'');',!'LetRegNum(5,%!5+1);');");>
+`);
+LetRegNum(5,%!6);
+
+// get position for current record
+GetDocAsASCII(0,"%O\%N.pdfsync",0,0);
+Loop(!`>
+   FindInString("%!0","%\p %!5 ",8,9,10);>
+   IfOK(!"// get current page for position <>
+      FindInString('%!0','<s \(+[0-9]\)>',8,9,1111,%!9);>
+      IfOK(!'Assign(|PDF_page|,|%#0|);');>
+      Stop;",>
+    !"IfNum(%!5,%!6+50,'=','JMP(''open_PDF'');',!'LetRegNum(5,%!5+1);');");>
+`);
+
+:open_PDF::
+StopWorking;
+
+//FindInString("%$('AcroRead');","Sumatra");
+//IfOK(!`Run('%$("AcroRead"); "%P\%N.pdf"','%P');>
+//       PopTagsandRegisters;>
+//       Exit;`);
+
+// Make sure SumatraPDF is launched (using the flag -reuse-instance)
+Run('%$("AcroRead"); -reuse-instance -inverse-search "\"%B\WinEdt.exe\" \"[Open(|%%f|);SelPar(%%l,8);]\""', '%P');
+//Run('C:\Users\Administrator\Desktop\SumatraPDF\SumatraPDF.exe -reuse-instance','%P');
+//  open a DDE session with sumatra
+DDEOpen('',"SUMATRA","control",1);>
+// send a DDE command to perform forward-search
+// the format of the DDE command is [ForwardSearch("<pdffilepath>","<sourcefilepath>",<line>,<column>[,<newwindow>, <setfocus>])]
+//    if newwindow = 1 then a new window is created even if the file is already open
+//    if focus = 1 then the focus is set to the window
+// e.g. [ForwardSearch("c:\file.pdf","c:\folder\source.tex",298,0)]
+DDEExe('[ForwardSearch("%P\%N.pdf","%q%n%t",%!l,0,0,0)]');>
+DDEClose;>
+PopTagsandRegisters;>
+Exit;`, '');
+
+
+
+:fallback::
+PopTagsandRegisters;
+Exe("%B\Exec\Acrobat OpenDoc.edt");
+Exit;
+
+$Id: Acrobat\040OpenDoc-Find.edt,v 1.6 2007-03-29 16:22:49+02 schlicht Exp schlicht $
